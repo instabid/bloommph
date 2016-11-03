@@ -6,26 +6,26 @@ import "sort"
 // A Table is an immutable hash table that provides constant-time lookups of key
 // indices using a minimal perfect hash.
 type Table struct {
-	keys       []string
-	level0     []uint32 // power of 2 size
-	level0Mask int      // len(Level0) - 1
-	level1     []uint32 // power of 2 size >= len(keys)
-	level1Mask int      // len(Level1) - 1
+	keys      []string
+	level0    []uint32
+	level0Len int
+	level1    []uint32
+	level1Len int
 }
 
 // Build builds a Table from keys using the "Hash, displace, and compress"
 // algorithm described in http://cmph.sourceforge.net/papers/esa09.pdf.
 func Build(keys []string) *Table {
 	var (
-		level0        = make([]uint32, nextPow2(len(keys)/4))
-		level0Mask    = len(level0) - 1
-		level1        = make([]uint32, nextPow2(len(keys)))
-		level1Mask    = len(level1) - 1
+		level0        = make([]uint32, len(keys)/4)
+		level0Len     = len(level0)
+		level1        = make([]uint32, len(keys))
+		level1Len     = len(level1)
 		sparseBuckets = make([][]int, len(level0))
 		zeroSeed      = murmurSeed(0)
 	)
 	for i, s := range keys {
-		n := int(zeroSeed.hash(s)) & level0Mask
+		n := int(zeroSeed.hash(s)) % level0Len
 		sparseBuckets[n] = append(sparseBuckets[n], i)
 	}
 	var buckets []indexBucket
@@ -43,7 +43,7 @@ func Build(keys []string) *Table {
 	trySeed:
 		tmpOcc = tmpOcc[:0]
 		for _, i := range bucket.vals {
-			n := int(seed.hash(keys[i])) & level1Mask
+			n := int(seed.hash(keys[i])) % level1Len
 			if occ[n] {
 				for _, n := range tmpOcc {
 					occ[n] = false
@@ -59,27 +59,19 @@ func Build(keys []string) *Table {
 	}
 
 	return &Table{
-		keys:       keys,
-		level0:     level0,
-		level0Mask: level0Mask,
-		level1:     level1,
-		level1Mask: level1Mask,
-	}
-}
-
-func nextPow2(n int) int {
-	for i := 1; ; i *= 2 {
-		if i >= n {
-			return i
-		}
+		keys:      keys,
+		level0:    level0,
+		level0Len: level0Len,
+		level1:    level1,
+		level1Len: level1Len,
 	}
 }
 
 // Lookup searches for s in t and returns its index and whether it was found.
 func (t *Table) Lookup(s string) (n uint32, ok bool) {
-	i0 := int(murmurSeed(0).hash(s)) & t.level0Mask
+	i0 := int(murmurSeed(0).hash(s)) % t.level0Len
 	seed := t.level0[i0]
-	i1 := int(murmurSeed(seed).hash(s)) & t.level1Mask
+	i1 := int(murmurSeed(seed).hash(s)) % t.level1Len
 	n = t.level1[i1]
 	return n, s == t.keys[int(n)]
 }
