@@ -15,11 +15,15 @@ type Table struct {
 
 // Build builds a Table from keys using the "Hash, displace, and compress"
 // algorithm described in http://cmph.sourceforge.net/papers/esa09.pdf.
-func Build(keys []string) *Table {
+func Build(keys []string, loadFactor float32) *Table {
+	if loadFactor > 1.0 || loadFactor == 0.0 {
+		loadFactor = 1.0
+	}
+	tableLen := int(float32(len(keys)) / loadFactor)
 	var (
-		level0        = make([]uint32, len(keys)/4)
+		level0        = make([]uint32, tableLen/4)
 		level0Len     = len(level0)
-		level1        = make([]uint32, len(keys))
+		level1        = make([]uint32, tableLen)
 		level1Len     = len(level1)
 		sparseBuckets = make([][]int, len(level0))
 		zeroSeed      = murmurSeed(0)
