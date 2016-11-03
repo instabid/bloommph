@@ -1,12 +1,16 @@
 // Package mph implements a minimal perfect hash table over strings.
 package mph
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/bitmagic/bloom"
+)
 
 // A Table is an immutable hash table that provides constant-time lookups of key
 // indices using a minimal perfect hash.
 type Table struct {
-	keyHashes []uint64
+	filter    *bloom.Filter
 	level0    []uint32
 	level0Len int
 	level1    []uint32
@@ -15,7 +19,7 @@ type Table struct {
 
 // Build builds a Table from keys using the "Hash, displace, and compress"
 // algorithm described in http://cmph.sourceforge.net/papers/esa09.pdf.
-func Build(keys []string, loadFactor float32) *Table {
+func Build(keys []string, loadFactor float32, fpProb float64) *Table {
 	if loadFactor > 1.0 || loadFactor == 0.0 {
 		loadFactor = 1.0
 	}
@@ -62,12 +66,13 @@ func Build(keys []string, loadFactor float32) *Table {
 		level0[int(bucket.n)] = uint32(seed)
 	}
 
-	keyHashes := make([]uint64, len(keys), len(keys))
-	for i, key := range keys {
-		keyHashes[i] = fnv64a([]byte(key))
+	filter := bloom.New(len(keys), fpProb)
+	for _, key := range keys {
+		filter.Add(key)
 	}
+
 	return &Table{
-		keyHashes: keyHashes,
+		filter:    filter,
 		level0:    level0,
 		level0Len: level0Len,
 		level1:    level1,
@@ -81,7 +86,7 @@ func (t *Table) Lookup(s string) (n uint32, ok bool) {
 	seed := t.level0[i0]
 	i1 := int(murmurSeed(seed).hash(s)) % t.level1Len
 	n = t.level1[i1]
-	return n, fnv64a([]byte(s)) == t.keyHashes[int(n)]
+	return n, t.filter.Has(s)
 }
 
 type indexBucket struct {
@@ -94,18 +99,3 @@ type bySize []indexBucket
 func (s bySize) Len() int           { return len(s) }
 func (s bySize) Less(i, j int) bool { return len(s[i].vals) > len(s[j].vals) }
 func (s bySize) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-
-// Inline implementation of FNV hash
-const (
-	offset64 = 14695981039346656037
-	prime64  = 1099511628211
-)
-
-func fnv64a(data []byte) uint64 {
-	var hash uint64 = offset64
-	for _, c := range data {
-		hash ^= uint64(c)
-		hash *= prime64
-	}
-	return hash
-}
