@@ -1,7 +1,11 @@
 // Package mph implements a minimal perfect hash table over strings.
 package mph
 
-import "sort"
+import (
+	"encoding/binary"
+	"errors"
+	"sort"
+)
 
 // A Table is an immutable hash table that provides constant-time lookups of key
 // indices using a minimal perfect hash.
@@ -108,4 +112,62 @@ func fnv64a(data []byte) uint64 {
 		hash *= prime64
 	}
 	return hash
+}
+
+const word = 64
+const bpw = word >> 3
+const bphw = word >> 4
+const ver = 1
+
+func (t *Table) MarshalBinary() ([]byte, error) {
+	size := (1+len(t.keyHashes)+1+1)*bpw + (t.level0Len+t.level1Len)*bphw + 1
+	data := make([]byte, size)
+	data[0] = ver
+	binary.LittleEndian.PutUint64(data[1:], uint64(len(t.keyHashes)))
+	binary.LittleEndian.PutUint64(data[1+bpw:], uint64(t.level0Len))
+	binary.LittleEndian.PutUint64(data[1+2*bpw:], uint64(t.level1Len))
+	start := 1 + 3*bpw
+	for i, kh := range t.keyHashes {
+		binary.LittleEndian.PutUint64(data[start+i*bpw:], kh)
+	}
+	start += len(t.keyHashes) * bpw
+	for i, v := range t.level0 {
+		binary.LittleEndian.PutUint32(data[start+i*bphw:], v)
+	}
+	start += len(t.level0) * bphw
+	for i, v := range t.level1 {
+		binary.LittleEndian.PutUint32(data[start+i*bphw:], v)
+	}
+	return data, nil
+}
+
+func (t *Table) UnmarshalBinary(data []byte) error {
+	if len(data) < 1+3*bpw {
+		return errors.New("mph.UnmarshalBinary: data to short. unknown encoding")
+	}
+	if data[0] != ver {
+		return errors.New("mph.UnmarshalBinary: unknown encoding")
+	}
+	keyHashesLen := int(binary.LittleEndian.Uint64(data[1:]))
+	t.level0Len = int(binary.LittleEndian.Uint64(data[1+bpw:]))
+	t.level1Len = int(binary.LittleEndian.Uint64(data[1+2*bpw:]))
+	if len(data) < (1+keyHashesLen+1+1)*bpw+(t.level0Len+t.level1Len)*bphw+1 {
+		return errors.New("mph.UnmarshalBinary: data to short. unknown encoding")
+	}
+	t.keyHashes = make([]uint64, keyHashesLen)
+	start := 1 + 3*bpw
+	for i := 0; i < keyHashesLen; i++ {
+		t.keyHashes[i] = binary.LittleEndian.Uint64(data[start+i*bpw:])
+	}
+	t.level0 = make([]uint32, t.level0Len)
+	start += keyHashesLen * bpw
+	for i := 0; i < t.level0Len; i++ {
+		t.level0[i] = binary.LittleEndian.Uint32(data[start+i*bphw:])
+	}
+	t.level1 = make([]uint32, t.level1Len)
+	start += t.level0Len * bphw
+	for i := 0; i < t.level1Len; i++ {
+		t.level1[i] = binary.LittleEndian.Uint32(data[start+i*bphw:])
+	}
+	return nil
 }
