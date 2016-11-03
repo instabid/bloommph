@@ -2,6 +2,8 @@
 package mph
 
 import (
+	"encoding/binary"
+	"errors"
 	"sort"
 
 	"github.com/bitmagic/bloom"
@@ -99,3 +101,64 @@ type bySize []indexBucket
 func (s bySize) Len() int           { return len(s) }
 func (s bySize) Less(i, j int) bool { return len(s[i].vals) > len(s[j].vals) }
 func (s bySize) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+const word = 64
+const bpw = word >> 3
+const bphw = word >> 4
+const ver = 1
+
+func (t *Table) MarshalBinary() ([]byte, error) {
+	bd, err := t.filter.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	size := (1+1+1)*bpw + len(bd) + (t.level0Len+t.level1Len)*bphw + 1
+	data := make([]byte, size)
+	data[0] = ver
+	binary.LittleEndian.PutUint64(data[1:], uint64(len(bd)))
+	binary.LittleEndian.PutUint64(data[1+bpw:], uint64(t.level0Len))
+	binary.LittleEndian.PutUint64(data[1+2*bpw:], uint64(t.level1Len))
+	start := 1 + 3*bpw
+	copy(data[start:start+len(bd)], bd)
+	start += len(bd)
+	for i, v := range t.level0 {
+		binary.LittleEndian.PutUint32(data[start+i*bphw:], v)
+	}
+	start += len(t.level0) * bphw
+	for i, v := range t.level1 {
+		binary.LittleEndian.PutUint32(data[start+i*bphw:], v)
+	}
+	return data, nil
+}
+
+func (t *Table) UnmarshalBinary(data []byte) error {
+	if len(data) < 1+3*bpw {
+		return errors.New("mph.UnmarshalBinary: data to short. unknown encoding")
+	}
+	if data[0] != ver {
+		return errors.New("mph.UnmarshalBinary: unknown encoding")
+	}
+	bloomFilterLen := int(binary.LittleEndian.Uint64(data[1:]))
+	t.level0Len = int(binary.LittleEndian.Uint64(data[1+bpw:]))
+	t.level1Len = int(binary.LittleEndian.Uint64(data[1+2*bpw:]))
+	if len(data) < (1+1+1)*bpw+bloomFilterLen+(t.level0Len+t.level1Len)*bphw+1 {
+		return errors.New("mph.UnmarshalBinary: data to short. unknown encoding")
+	}
+	start := 1 + 3*bpw
+	t.filter = new(bloom.Filter)
+	err := t.filter.UnmarshalBinary(data[start : start+bloomFilterLen])
+	if err != nil {
+		return err
+	}
+	t.level0 = make([]uint32, t.level0Len)
+	start += bloomFilterLen
+	for i := 0; i < t.level0Len; i++ {
+		t.level0[i] = binary.LittleEndian.Uint32(data[start+i*bphw:])
+	}
+	t.level1 = make([]uint32, t.level1Len)
+	start += t.level0Len * bphw
+	for i := 0; i < t.level1Len; i++ {
+		t.level1[i] = binary.LittleEndian.Uint32(data[start+i*bphw:])
+	}
+	return nil
+}
