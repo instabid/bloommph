@@ -19,12 +19,31 @@ type Table struct {
 	level1Len int
 }
 
+const maxSeedAttempts = 100000000
+
 // Build builds a Table from keys using the "Hash, displace, and compress"
 // algorithm described in http://cmph.sourceforge.net/papers/esa09.pdf.
-func Build(keys []string, loadFactor float32, fpProb float64) *Table {
+func Build(keys []string, loadFactor float32, fpProb float64) (*Table, error) {
+	filter := bloom.New(len(keys), fpProb)
+	for _, key := range keys {
+		filter.Add(key)
+	}
 	if loadFactor > 1.0 || loadFactor == 0.0 {
 		loadFactor = 1.0
 	}
+	for {
+		table := buildInternal(keys, loadFactor, filter)
+		if table != nil {
+			return table, nil
+		}
+		loadFactor *= 0.9
+		if loadFactor < 0.1 {
+			return nil, errors.New("Failed creating table")
+		}
+	}
+}
+
+func buildInternal(keys []string, loadFactor float32, filter *bloom.Filter) *Table {
 	tableLen := int(float32(len(keys)) / loadFactor)
 	var (
 		level0        = make([]uint32, tableLen/4)
@@ -51,26 +70,28 @@ func Build(keys []string, loadFactor float32, fpProb float64) *Table {
 	for _, bucket := range buckets {
 		var seed murmurSeed
 	trySeed:
+		seenKeys := make(map[string]bool)
 		tmpOcc = tmpOcc[:0]
 		for _, i := range bucket.vals {
 			n := int(seed.hash(keys[i])) % level1Len
 			if occ[n] {
-				for _, n := range tmpOcc {
-					occ[n] = false
+				if _, contains := seenKeys[keys[i]]; !contains {
+					for _, n := range tmpOcc {
+						occ[n] = false
+					}
+					seed++
+					if seed > maxSeedAttempts {
+						return nil
+					}
+					goto trySeed
 				}
-				seed++
-				goto trySeed
 			}
 			occ[n] = true
 			tmpOcc = append(tmpOcc, n)
 			level1[n] = uint32(i)
+			seenKeys[keys[i]] = true
 		}
 		level0[int(bucket.n)] = uint32(seed)
-	}
-
-	filter := bloom.New(len(keys), fpProb)
-	for _, key := range keys {
-		filter.Add(key)
 	}
 
 	return &Table{
