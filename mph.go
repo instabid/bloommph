@@ -6,7 +6,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/bitmagic/bloom"
+	"github.com/instabid/bloom"
 )
 
 // A Table is an immutable hash table that provides constant-time lookups of key
